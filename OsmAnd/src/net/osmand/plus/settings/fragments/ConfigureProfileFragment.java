@@ -20,7 +20,6 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.content.ContextCompat;
-import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
@@ -43,9 +42,9 @@ import net.osmand.plus.openseamapsplugin.NauticalMapsPlugin;
 import net.osmand.plus.profiles.SelectCopyAppModeBottomSheet;
 import net.osmand.plus.profiles.SelectCopyAppModeBottomSheet.CopyAppModePrefsListener;
 import net.osmand.plus.settings.backend.ApplicationMode;
-import net.osmand.plus.settings.backend.backup.SettingsHelper;
-import net.osmand.plus.settings.backend.backup.SettingsHelper.SettingsCollectListener;
-import net.osmand.plus.settings.backend.backup.SettingsItem;
+import net.osmand.plus.settings.backend.backup.SettingsHelper.CollectListener;
+import net.osmand.plus.settings.backend.backup.SettingsHelper.ImportListener;
+import net.osmand.plus.settings.backend.backup.items.SettingsItem;
 import net.osmand.plus.settings.bottomsheets.ResetProfilePrefsBottomSheet;
 import net.osmand.plus.settings.bottomsheets.ResetProfilePrefsBottomSheet.ResetAppModePrefsListener;
 import net.osmand.plus.skimapsplugin.SkiMapsPlugin;
@@ -186,9 +185,9 @@ public class ConfigureProfileFragment extends BaseSettingsFragment implements Co
 	}
 
 	private void restoreCustomModeFromFile(final File file) {
-		app.getSettingsHelper().collectSettings(file, "", 1, new SettingsCollectListener() {
+		app.getFileSettingsHelper().collectSettings(file, "", 1, new CollectListener() {
 			@Override
-			public void onSettingsCollectFinished(boolean succeed, boolean empty, @NonNull List<SettingsItem> items) {
+			public void onCollectFinished(boolean succeed, boolean empty, @NonNull List<SettingsItem> items) {
 				if (succeed) {
 					for (SettingsItem item : items) {
 						item.setShouldReplace(true);
@@ -200,9 +199,9 @@ public class ConfigureProfileFragment extends BaseSettingsFragment implements Co
 	}
 
 	private void importBackupSettingsItems(File file, List<SettingsItem> items) {
-		app.getSettingsHelper().importSettings(file, items, "", 1, new SettingsHelper.SettingsImportListener() {
+		app.getFileSettingsHelper().importSettings(file, items, "", 1, new ImportListener() {
 			@Override
-			public void onSettingsImportFinished(boolean succeed, boolean needRestart, @NonNull List<SettingsItem> items) {
+			public void onImportFinished(boolean succeed, boolean needRestart, @NonNull List<SettingsItem> items) {
 				app.showToastMessage(R.string.profile_prefs_reset_successful);
 				updateCopiedOrResetPrefs();
 			}
@@ -346,7 +345,7 @@ public class ConfigureProfileFragment extends BaseSettingsFragment implements Co
 		if (mode.isCustomProfile() && !getBackupFileForCustomMode(app, mode.getStringKey()).exists()) {
 			resetToDefault.setVisible(false);
 		} else {
-			OsmandDevelopmentPlugin plugin = OsmandPlugin.getEnabledPlugin(OsmandDevelopmentPlugin.class);
+			OsmandDevelopmentPlugin plugin = OsmandPlugin.getActivePlugin(OsmandDevelopmentPlugin.class);
 			if (plugin != null && mode.getParent() != null) {
 				String baseProfile = "(" + mode.getParent().toHumanString() + ")";
 				String title = getString(R.string.ltr_or_rtl_combine_via_space, getString(R.string.reset_to_default), baseProfile);
@@ -374,7 +373,7 @@ public class ConfigureProfileFragment extends BaseSettingsFragment implements Co
 		if (ctx == null) {
 			return;
 		}
-		List<OsmandPlugin> plugins = OsmandPlugin.getVisiblePlugins();
+		List<OsmandPlugin> plugins = OsmandPlugin.getAvailablePlugins();
 		for (OsmandPlugin plugin : plugins) {
 			if (plugin instanceof SkiMapsPlugin || plugin instanceof NauticalMapsPlugin || plugin.getSettingsScreenType() == null) {
 				continue;
@@ -408,21 +407,19 @@ public class ConfigureProfileFragment extends BaseSettingsFragment implements Co
 		String prefId = preference.getKey();
 
 		if (CONFIGURE_MAP.equals(prefId) || CONFIGURE_SCREEN.equals(prefId)) {
-			FragmentActivity activity = getActivity();
-			if (activity != null) {
+			MapActivity mapActivity = getMapActivity();
+			if (mapActivity != null) {
 				try {
-					FragmentManager fragmentManager = activity.getSupportFragmentManager();
-					if (fragmentManager != null) {
-						ApplicationMode selectedMode = getSelectedAppMode();
-						if (!ApplicationMode.values(app).contains(selectedMode)) {
-							ApplicationMode.changeProfileAvailability(selectedMode, true, app);
-						}
-						settings.setApplicationMode(selectedMode);
-						fragmentManager.beginTransaction()
-								.remove(this)
-								.addToBackStack(TAG)
-								.commitAllowingStateLoss();
+					FragmentManager fragmentManager = mapActivity.getSupportFragmentManager();
+					ApplicationMode selectedMode = getSelectedAppMode();
+					if (!ApplicationMode.values(app).contains(selectedMode)) {
+						ApplicationMode.changeProfileAvailability(selectedMode, true, app);
 					}
+					settings.setApplicationMode(selectedMode);
+					fragmentManager.beginTransaction()
+							.remove(this)
+							.addToBackStack(TAG)
+							.commitAllowingStateLoss();
 				} catch (Exception e) {
 					LOG.error(e);
 				}

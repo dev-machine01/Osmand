@@ -20,7 +20,7 @@ import net.osmand.plus.inapp.InAppPurchaseHelper;
 import net.osmand.plus.inapp.InAppPurchaseHelper.InAppPurchaseInitCallback;
 import net.osmand.plus.inapp.InAppPurchaseHelper.InAppPurchaseListener;
 import net.osmand.plus.inapp.InAppPurchaseHelper.InAppPurchaseTaskType;
-import net.osmand.plus.liveupdates.OsmLiveRestartBottomSheetDialogFragment;
+import net.osmand.plus.settings.backend.OsmandSettings;
 
 import org.apache.commons.logging.Log;
 
@@ -49,10 +49,11 @@ public class OsmandInAppPurchaseActivity extends AppCompatActivity implements In
 
 	private void initInAppPurchaseHelper() {
 		deinitInAppPurchaseHelper();
+		OsmandApplication app = getMyApplication();
+		OsmandSettings settings = app.getSettings();
 		if (purchaseHelper == null) {
-			OsmandApplication app = getMyApplication();
 			InAppPurchaseHelper purchaseHelper = app.getInAppPurchaseHelper();
-			if (app.getSettings().isInternetConnectionAvailable()
+			if (settings.isInternetConnectionAvailable()
 					&& isInAppPurchaseAllowed()
 					&& isInAppPurchaseSupported()) {
 				this.purchaseHelper = purchaseHelper;
@@ -76,6 +77,11 @@ public class OsmandInAppPurchaseActivity extends AppCompatActivity implements In
 				public void onFail() {
 				}
 			});
+		} else if (isInAppPurchaseAllowed() && settings.isInternetConnectionAvailable()) {
+			InAppPurchaseHelper purchaseHelper = app.getInAppPurchaseHelper();
+			if (purchaseHelper != null && purchaseHelper.needRequestPromo()) {
+				purchaseHelper.checkPromoAsync(null);
+			}
 		}
 	}
 
@@ -193,14 +199,8 @@ public class OsmandInAppPurchaseActivity extends AppCompatActivity implements In
 	@Override
 	public void onItemPurchased(String sku, boolean active) {
 		FragmentManager fragmentManager = getSupportFragmentManager();
-		if (purchaseHelper != null && purchaseHelper.getLiveUpdates().containsSku(sku)) {
+		if (purchaseHelper != null && purchaseHelper.getSubscriptions().containsSku(sku)) {
 			getMyApplication().logEvent("live_osm_subscription_purchased");
-
-			if (!active && !fragmentManager.isStateSaved()) {
-				OsmLiveRestartBottomSheetDialogFragment fragment = new OsmLiveRestartBottomSheetDialogFragment();
-				fragment.setUsedOnMap(this instanceof MapActivity);
-				fragment.show(fragmentManager, OsmLiveRestartBottomSheetDialogFragment.TAG);
-			}
 		}
 		onInAppPurchaseItemPurchased(sku);
 		fireInAppPurchaseItemPurchasedOnFragments(fragmentManager, sku, active);
@@ -244,7 +244,7 @@ public class OsmandInAppPurchaseActivity extends AppCompatActivity implements In
 	}
 
 	public void fireInAppPurchaseDismissProgressOnFragments(@NonNull FragmentManager fragmentManager,
-														 InAppPurchaseTaskType taskType) {
+															InAppPurchaseTaskType taskType) {
 		List<Fragment> fragments = fragmentManager.getFragments();
 		for (Fragment f : fragments) {
 			if (f instanceof InAppPurchaseListener && f.isAdded()) {

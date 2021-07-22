@@ -36,6 +36,7 @@ import net.osmand.router.RoutePlannerFrontEnd;
 import net.osmand.router.RoutePlannerFrontEnd.GpxPoint;
 import net.osmand.router.RoutePlannerFrontEnd.GpxRouteApproximation;
 import net.osmand.router.RoutePlannerFrontEnd.RouteCalculationMode;
+import net.osmand.router.RouteResultPreparation;
 import net.osmand.router.RouteSegmentResult;
 import net.osmand.router.RoutingConfiguration;
 import net.osmand.router.RoutingConfiguration.Builder;
@@ -167,7 +168,6 @@ public class RouteProvider {
 				LatLon end = new LatLon(gpxPoint.getLatitude(), gpxPoint.getLongitude());
 
 				RouteCalculationParams params = new RouteCalculationParams();
-				params.inSnapToRoadMode = true;
 				params.start = start;
 				params.end = end;
 				RoutingHelper.applyApplicationSettings(params, routeParams.ctx.getSettings(), appMode);
@@ -202,12 +202,13 @@ public class RouteProvider {
 			gpxRouteResult = gpxRoute;
 		}
 		if (!Algorithms.isEmpty(gpxRouteResult)) {
+			calculateGpxRouteTimeSpeed(routeParams, gpxRouteResult);
 			if (calcWholeRoute && !calculateOsmAndRouteParts) {
 				return new RouteCalculationResult(gpxRouteResult, routeParams.start, routeParams.end,
-						routeParams.intermediates, routeParams.ctx, routeParams.leftSide, null, null, routeParams.mode, true);
+						routeParams.intermediates, routeParams.ctx, routeParams.leftSide, null, gpxParams.wpt, routeParams.mode, true);
 			}
 			RouteCalculationResult result = new RouteCalculationResult(gpxRouteResult, routeParams.start, routeParams.end,
-						routeParams.intermediates, routeParams.ctx, routeParams.leftSide, null, null, routeParams.mode, false);
+						routeParams.intermediates, routeParams.ctx, routeParams.leftSide, null, gpxParams.wpt, routeParams.mode, false);
 			List<Location> gpxRouteLocations = result.getImmutableAllLocations();
 			int nearestGpxPointInd = calcWholeRoute ? 0 : findNearestGpxPointIndexFromRoute(gpxRouteLocations, routeParams.start, calculateOsmAndRouteParts);
 			Location nearestGpxLocation = null;
@@ -218,6 +219,7 @@ public class RouteProvider {
 
 			if (nearestGpxPointInd > 0) {
 				nearestGpxLocation = gpxRouteLocations.get(nearestGpxPointInd);
+
 			} else if (!gpxRouteLocations.isEmpty()) {
 				nearestGpxLocation = gpxRouteLocations.get(0);
 			}
@@ -225,9 +227,12 @@ public class RouteProvider {
 				gpxRoute = findRouteWithIntermediateSegments(routeParams, result, gpxRouteLocations, gpxParams.segmentEndpoints, nearestGpxPointInd);
 			} else {
 				if (nearestGpxPointInd > 0) {
-					gpxRoute = result.getOriginalRoute(nearestGpxPointInd);
-					if (gpxRoute.size() > 0) {
-						gpxRoute.remove(0);
+					gpxRoute = result.getOriginalRoute(nearestGpxPointInd, false);
+					if (!Algorithms.isEmpty(gpxRoute)) {
+						LatLon startPoint = gpxRoute.get(0).getStartPoint();
+						nearestGpxLocation = new Location("", startPoint.getLatitude(), startPoint.getLongitude());
+					} else {
+						nearestGpxLocation = new Location("", routeParams.end.getLatitude(), routeParams.end.getLongitude());
 					}
 				} else {
 					gpxRoute = result.getOriginalRoute();
@@ -257,7 +262,7 @@ public class RouteProvider {
 				newGpxRoute.addAll(lastSegmentRoute);
 			}
 			return new RouteCalculationResult(newGpxRoute, routeParams.start, routeParams.end,
-					routeParams.intermediates, routeParams.ctx, routeParams.leftSide, null, null, routeParams.mode, true);
+					routeParams.intermediates, routeParams.ctx, routeParams.leftSide, null, gpxParams.wpt, routeParams.mode, true);
 		}
 
 		if (routeParams.gpxRoute.useIntermediatePointsRTE) {
@@ -287,6 +292,13 @@ public class RouteProvider {
 
 		return new RouteCalculationResult(gpxRoute, gpxDirections, routeParams,
 				gpxParams.wpt, routeParams.gpxRoute.addMissingTurns);
+	}
+
+	private void calculateGpxRouteTimeSpeed(RouteCalculationParams params, List<RouteSegmentResult> gpxRouteResult) throws IOException {
+		RoutingEnvironment env = calculateRoutingEnvironment(params, false, true);
+		if (env != null) {
+			RouteResultPreparation.calculateTimeSpeed(env.getCtx(), gpxRouteResult);
+		}
 	}
 
 	private RouteCalculationResult calculateOsmAndRouteWithIntermediatePoints(RouteCalculationParams routeParams,
@@ -471,7 +483,7 @@ public class RouteProvider {
 			int indexNew = findNearestGpxPointIndexFromRoute(gpxRouteLocations, newSegmentPoint, routeParams.gpxRoute.calculateOsmAndRouteParts);
 			int indexPrev = findNearestGpxPointIndexFromRoute(gpxRouteLocations, prevSegmentPoint, routeParams.gpxRoute.calculateOsmAndRouteParts);
 			if (indexPrev != -1 && indexPrev > nearestGpxPointInd && indexNew != -1) {
-				newGpxRoute.addAll(result.getOriginalRoute(lastIndex, indexPrev));
+				newGpxRoute.addAll(result.getOriginalRoute(lastIndex, indexPrev, true));
 				lastIndex = indexNew;
 
 				LatLon end = new LatLon(newSegmentPoint.getLatitude(), newSegmentPoint.getLongitude());

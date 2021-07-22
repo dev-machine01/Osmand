@@ -517,6 +517,17 @@ public class AudioVideoNotesPlugin extends OsmandPlugin {
 			}
 			return additional.toString();
 		}
+
+		public static String getNameForMultimediaFile(@NonNull OsmandApplication app, @NonNull String fileName, long lastModified) {
+			if (fileName.endsWith(IMG_EXTENSION)) {
+				return app.getString(R.string.shared_string_photo) + " " + formatDateTime(app, lastModified);
+			} else if (fileName.endsWith(MPEG4_EXTENSION)) {
+				return app.getString(R.string.shared_string_video) + " " + formatDateTime(app, lastModified);
+			} else if (fileName.endsWith(THREEGP_EXTENSION)) {
+				return app.getString(R.string.shared_string_audio) + " " + formatDateTime(app, lastModified);
+			}
+			return "";
+		}
 	}
 
 	public static int getIconIdForRecordingFile(@NonNull File file) {
@@ -750,8 +761,10 @@ public class AudioVideoNotesPlugin extends OsmandPlugin {
 				} else if (!mapView.getLayers().contains(audioNotesLayer)) {
 					mapView.addLayer(audioNotesLayer, 3.5f);
 				}
+				mapView.refreshMap();
 			} else if (audioNotesLayer != null) {
 				mapView.removeLayer(audioNotesLayer);
+				mapView.refreshMap();
 			}
 			if (recordControl == null) {
 				registerWidget(activity);
@@ -759,6 +772,7 @@ public class AudioVideoNotesPlugin extends OsmandPlugin {
 		} else {
 			if (audioNotesLayer != null) {
 				mapView.removeLayer(audioNotesLayer);
+				mapView.refreshMap();
 				audioNotesLayer = null;
 			}
 			MapInfoLayer mapInfoLayer = activity.getMapLayers().getMapInfoLayer();
@@ -1793,7 +1807,7 @@ public class AudioVideoNotesPlugin extends OsmandPlugin {
 				if (rec != null &&
 						(app.getSettings().SAVE_TRACK_TO_GPX.get()
 								|| app.getSettings().SAVE_GLOBAL_TRACK_TO_GPX.get())
-						&& OsmandPlugin.getEnabledPlugin(OsmandMonitoringPlugin.class) != null) {
+						&& OsmandPlugin.isActive(OsmandMonitoringPlugin.class)) {
 					String name = f.getName();
 					SavingTrackHelper savingTrackHelper = app.getSavingTrackHelper();
 					savingTrackHelper.insertPointData(rec.lat, rec.lon, System.currentTimeMillis(), null, name, null, 0);

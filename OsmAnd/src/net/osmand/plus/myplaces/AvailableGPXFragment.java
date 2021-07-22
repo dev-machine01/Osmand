@@ -107,7 +107,6 @@ import static net.osmand.plus.track.TrackMenuFragment.openTrack;
 import static net.osmand.util.Algorithms.capitalizeFirstLetter;
 import static net.osmand.util.Algorithms.formatDuration;
 import static net.osmand.util.Algorithms.objectEquals;
-import static net.osmand.util.Algorithms.removeAllFiles;
 
 public class AvailableGPXFragment extends OsmandExpandableListFragment implements
 		FavoritesFragmentStateHolder, OsmAuthorizationListener, OnTrackFileMoveListener, RenameCallback {
@@ -238,7 +237,7 @@ public class AvailableGPXFragment extends OsmandExpandableListFragment implement
 	}
 
 	public void updateCurrentTrack() {
-		final OsmandMonitoringPlugin plugin = OsmandPlugin.getEnabledPlugin(OsmandMonitoringPlugin.class);
+		final OsmandMonitoringPlugin plugin = OsmandPlugin.getActivePlugin(OsmandMonitoringPlugin.class);
 		if (currentGpxView == null || plugin == null) {
 			return;
 		}
@@ -336,7 +335,7 @@ public class AvailableGPXFragment extends OsmandExpandableListFragment implement
 		View v = inflater.inflate(R.layout.available_gpx, container, false);
 		listView = (ExpandableListView) v.findViewById(android.R.id.list);
 		setHasOptionsMenu(true);
-		if (OsmandPlugin.getEnabledPlugin(OsmandMonitoringPlugin.class) != null) {
+		if (OsmandPlugin.isActive(OsmandMonitoringPlugin.class)) {
 			currentGpxView = inflater.inflate(R.layout.current_gpx_item, null, false);
 			createCurrentTrackView();
 			currentGpxView.findViewById(R.id.current_track_info).setOnClickListener(new View.OnClickListener() {
@@ -821,7 +820,7 @@ public class AvailableGPXFragment extends OsmandExpandableListFragment implement
 		} else {
 			app.showToastMessage(R.string.file_can_not_be_moved);
 		}
-  }
+	}
 
 	public void renamedTo(File file) {
 		reloadTracks();
@@ -1461,8 +1460,8 @@ public class AvailableGPXFragment extends OsmandExpandableListFragment implement
 				.create()
 		);
 
-		final OsmEditingPlugin osmEditingPlugin = OsmandPlugin.getEnabledPlugin(OsmEditingPlugin.class);
-		if (osmEditingPlugin != null && osmEditingPlugin.isActive()) {
+		final OsmEditingPlugin osmEditingPlugin = OsmandPlugin.getActivePlugin(OsmEditingPlugin.class);
+		if (osmEditingPlugin != null) {
 			items.add(new PopUpMenuItem.Builder(app)
 					.setTitleId(R.string.shared_string_export)
 					.setIcon(iconsCache.getThemedIcon(R.drawable.ic_action_export))

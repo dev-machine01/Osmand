@@ -134,13 +134,26 @@ task validateTranslate {
 	}
 }
 
-task downloadDefaultWikivoyage {
+
+task downloadDefaultWikivoyage(type: Download) {
+	src 'https://builder.osmand.net/wikivoyage-gen/sqlite/Default_wikivoyage_2.travel.obf'
+	dest 'assets/Default_wikivoyage.travel.obf'
+	onlyIfModified true
+}
+
+task downloadWorldMiniBasemap(type: Download)  {
+	src 'https://builder.osmand.net/basemap/World_basemap_mini_2.obf'
+	dest 'assets/World_basemap_mini.obf'
+	onlyIfModified true
+}
+
+task downloadDefaultWikivoyageAnt {
 	doLast {
 		ant.get(src: 'https://builder.osmand.net/wikivoyage-gen/sqlite/Default_wikivoyage_2.travel.obf', dest: 'assets/Default_wikivoyage.travel.obf', skipexisting: 'true')
 	}
 }
 
-task downloadWorldMiniBasemap {
+task downloadWorldMiniBasemapAnt {
 	doLast {
 		ant.get(src: 'https://builder.osmand.net/basemap/World_basemap_mini_2.obf', dest: 'assets/World_basemap_mini.obf', skipexisting: 'true')
 	}
@@ -153,10 +166,15 @@ task collectVoiceAssets(type: Sync) {
 }
 
 task collectFonts(type: Copy) {
-	from "../../resources/fonts"
 	from "../../resources/rendering_styles/fonts"
 //	from "../../resources/rendering_styles/fonts/OpenSans"
 	into "assets/fonts"
+	include "*.ttf"
+}
+
+task collectUiFonts(type: Copy) {
+	from "../../resources/fonts"
+	into "assets/ui-fonts"
 	include "*.ttf"
 }
 
@@ -258,6 +276,7 @@ task copyWidgetIcons(type: Sync) {
 task collectExternalResources {
 	dependsOn collectVoiceAssets,
 			collectFonts,
+			collectUiFonts,
 			collectHelpContentsAssets,
 			collectHelpContentsStyle,
 			copyMapShaderIcons,
@@ -361,7 +380,7 @@ dependencies {
 
 	legacyImplementation "net.osmand:OsmAndCore_android:0.1-SNAPSHOT@jar"
 
-	implementation("com.getkeepsafe.taptargetview:taptargetview:1.12.0") {
+	implementation("com.getkeepsafe.taptargetview:taptargetview:1.13.2") {
 		exclude group: 'com.android.support'
 	}
 	implementation 'com.github.PhilJay:MPAndroidChart:v3.0.1'

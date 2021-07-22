@@ -731,7 +731,8 @@ public class MapRenderRepositories {
 					prefs.MAP_PREFERRED_LOCALE.get() != null && prefs.MAP_PREFERRED_LOCALE.get().isEmpty()) {
 				currentRenderingContext.preferredLocale = app.getLanguage();
 				currentRenderingContext.transliterate =
-						!languagesNotTransliterateOnBasemap.contains(app.getLanguage());
+						!languagesNotTransliterateOnBasemap.contains(app.getLanguage())
+						&& prefs.MAP_TRANSLITERATE_NAMES.get();
 			} else {
 				currentRenderingContext.preferredLocale = prefs.MAP_PREFERRED_LOCALE.get();
 				currentRenderingContext.transliterate = prefs.MAP_TRANSLITERATE_NAMES.get();
@@ -809,7 +810,7 @@ public class MapRenderRepositories {
 			// keep cache
 			// this.prevBmp = null;
 			this.prevBmpLocation = null;
-			if (prefs.DEBUG_RENDERING_INFO.get() && OsmandPlugin.getEnabledPlugin(OsmandDevelopmentPlugin.class) != null) {
+			if (prefs.DEBUG_RENDERING_INFO.get() && OsmandPlugin.isActive(OsmandDevelopmentPlugin.class)) {
 				String timeInfo = "Searching: " + searchTime + " ms"; //$NON-NLS-1$//$NON-NLS-2$//$NON-NLS-3$
 				if (renderingDebugInfo != null) {
 					timeInfo += "\n" + renderingDebugInfo;

@@ -41,6 +41,7 @@ import net.osmand.plus.helpers.AvoidSpecificRoads.AvoidRoadInfo;
 import net.osmand.plus.helpers.FileNameTranslationHelper;
 import net.osmand.plus.helpers.GpxUiHelper;
 import net.osmand.plus.helpers.SearchHistoryHelper.HistoryEntry;
+import net.osmand.plus.mapmarkers.ItineraryType;
 import net.osmand.plus.mapmarkers.MapMarkersGroup;
 import net.osmand.plus.onlinerouting.engine.OnlineRoutingEngine;
 import net.osmand.plus.osmedit.OpenstreetmapPoint;
@@ -48,17 +49,17 @@ import net.osmand.plus.osmedit.OsmEditingPlugin;
 import net.osmand.plus.osmedit.OsmNotesPoint;
 import net.osmand.plus.poi.PoiUIFilter;
 import net.osmand.plus.profiles.ProfileIconColors;
-import net.osmand.plus.profiles.RoutingProfileDataObject.RoutingProfilesResources;
+import net.osmand.plus.profiles.data.RoutingDataObject.RoutingProfilesResources;
 import net.osmand.plus.quickaction.QuickAction;
 import net.osmand.plus.render.RenderingIcons;
 import net.osmand.plus.settings.backend.ApplicationMode;
 import net.osmand.plus.settings.backend.ApplicationMode.ApplicationModeBean;
 import net.osmand.plus.settings.backend.ExportSettingsType;
-import net.osmand.plus.settings.backend.backup.FileSettingsItem;
-import net.osmand.plus.settings.backend.backup.FileSettingsItem.FileSubtype;
-import net.osmand.plus.settings.backend.backup.GlobalSettingsItem;
 import net.osmand.plus.settings.backend.backup.GpxAppearanceInfo;
-import net.osmand.plus.settings.backend.backup.GpxSettingsItem;
+import net.osmand.plus.settings.backend.backup.items.FileSettingsItem;
+import net.osmand.plus.settings.backend.backup.items.FileSettingsItem.FileSubtype;
+import net.osmand.plus.settings.backend.backup.items.GlobalSettingsItem;
+import net.osmand.plus.settings.backend.backup.items.GpxSettingsItem;
 import net.osmand.plus.settings.fragments.ExportSettingsAdapter.OnItemSelectedListener;
 import net.osmand.util.Algorithms;
 import net.osmand.view.ThreeStateCheckbox;
@@ -70,9 +71,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-import static net.osmand.plus.audionotes.AudioVideoNotesPlugin.IMG_EXTENSION;
-import static net.osmand.plus.audionotes.AudioVideoNotesPlugin.MPEG4_EXTENSION;
-import static net.osmand.plus.audionotes.AudioVideoNotesPlugin.THREEGP_EXTENSION;
 import static net.osmand.view.ThreeStateCheckbox.State.CHECKED;
 import static net.osmand.view.ThreeStateCheckbox.State.MISC;
 import static net.osmand.view.ThreeStateCheckbox.State.UNCHECKED;
@@ -163,7 +161,7 @@ public class ExportItemsBottomSheet extends MenuBottomSheetDialogFragment {
 	}
 
 	@Override
-	public void onSaveInstanceState(Bundle outState) {
+	public void onSaveInstanceState(@NonNull Bundle outState) {
 		super.onSaveInstanceState(outState);
 		outState.putBoolean(EXPORT_MODE_KEY, exportMode);
 		outState.putString(SETTINGS_TYPE_KEY, type.name());
@@ -385,6 +383,17 @@ public class ExportItemsBottomSheet extends MenuBottomSheetDialogFragment {
 			} else if (ExportSettingsType.HISTORY_MARKERS.name().equals(markersGroup.getId())) {
 				item.setTitle(getString(R.string.markers_history));
 				item.setIcon(uiUtilities.getIcon(R.drawable.ic_action_history, getItemIconColor(object)));
+			} else {
+				String groupName = markersGroup.getName();
+				if (Algorithms.isEmpty(groupName)) {
+					if (markersGroup.getType() == ItineraryType.FAVOURITES) {
+						groupName = app.getString(R.string.shared_string_favorites);
+					} else if (markersGroup.getType() == ItineraryType.MARKERS) {
+						groupName = app.getString(R.string.map_markers);
+					}
+				}
+				item.setTitle(groupName);
+				item.setIcon(uiUtilities.getIcon(R.drawable.ic_action_flag, getItemIconColor(object)));
 			}
 			int selectedMarkers = markersGroup.getMarkers().size();
 			String itemsDescr = getString(R.string.shared_string_items);
@@ -416,7 +425,7 @@ public class ExportItemsBottomSheet extends MenuBottomSheetDialogFragment {
 			}
 			if (item.getTag() instanceof FileSettingsItem) {
 				FileSettingsItem settingsItem = (FileSettingsItem) item.getTag();
-				item.setTitle(getNameForMultimediaFile(settingsItem.getFile(), settingsItem.getLastModified()));
+				item.setTitle(Recording.getNameForMultimediaFile(app, file.getName(), settingsItem.getLastModifiedTime()));
 			} else {
 				item.setTitle(new Recording(file).getName(app, true));
 			}
@@ -444,18 +453,6 @@ public class ExportItemsBottomSheet extends MenuBottomSheetDialogFragment {
 		item.setTitle(GpxUiHelper.getGpxTitle(file.getName()));
 		item.setDescription(getTrackDescr(file, file.lastModified(), file.length(), appearanceInfo));
 		item.setIcon(uiUtilities.getIcon(R.drawable.ic_action_route_distance, getItemIconColor(item.getTag())));
-	}
-
-	private String getNameForMultimediaFile(@NonNull File file, long lastModified) {
-		String fileName = file.getName();
-		if (fileName.endsWith(IMG_EXTENSION)) {
-			return getString(R.string.shared_string_photo) + " " + Recording.formatDateTime(app, lastModified);
-		} else if (fileName.endsWith(MPEG4_EXTENSION)) {
-			return getString(R.string.shared_string_video) + " " + Recording.formatDateTime(app, lastModified);
-		} else if (fileName.endsWith(THREEGP_EXTENSION)) {
-			return getString(R.string.shared_string_audio) + " " + Recording.formatDateTime(app, lastModified);
-		}
-		return "";
 	}
 
 	private int getItemIconColor(Object object) {

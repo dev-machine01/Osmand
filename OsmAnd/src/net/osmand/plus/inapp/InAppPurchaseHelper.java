@@ -8,10 +8,15 @@ import android.os.AsyncTask;
 import android.text.TextUtils;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
 import net.osmand.AndroidNetworkUtils;
 import net.osmand.AndroidNetworkUtils.OnRequestResultListener;
 import net.osmand.AndroidNetworkUtils.OnSendRequestsListener;
+import net.osmand.AndroidNetworkUtils.Request;
 import net.osmand.AndroidNetworkUtils.RequestResponse;
+import net.osmand.CallbackWithObject;
 import net.osmand.PlatformUtil;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.R;
@@ -41,9 +46,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-
 public abstract class InAppPurchaseHelper {
 	// Debug tag, for logging
 	protected static final org.apache.commons.logging.Log LOG = PlatformUtil.getLog(InAppPurchaseHelper.class);
@@ -65,6 +67,9 @@ public abstract class InAppPurchaseHelper {
 
 	protected OsmandApplication ctx;
 	protected InAppPurchaseListener uiActivity = null;
+
+	protected long lastPromoCheckTime;
+	protected boolean promoRequested;
 
 	public interface InAppPurchaseListener {
 
@@ -88,13 +93,14 @@ public abstract class InAppPurchaseHelper {
 
 	static class SubscriptionStateHolder {
 		SubscriptionState state = SubscriptionState.UNDEFINED;
+		long startTime = 0;
 		long expireTime = 0;
 	}
 
 	public enum InAppPurchaseTaskType {
 		REQUEST_INVENTORY,
 		PURCHASE_FULL_VERSION,
-		PURCHASE_LIVE_UPDATES,
+		PURCHASE_SUBSCRIPTION,
 		PURCHASE_DEPTH_CONTOURS,
 		PURCHASE_CONTOUR_LINES
 	}
@@ -126,8 +132,38 @@ public abstract class InAppPurchaseHelper {
 		return activeTask;
 	}
 
+	public static boolean isSubscribedToAny(@NonNull OsmandApplication ctx) {
+		return Version.isDeveloperBuild(ctx)
+				|| ctx.getSettings().OSMAND_MAPS_PURCHASED.get()
+				|| ctx.getSettings().LIVE_UPDATES_PURCHASED.get()
+				|| ctx.getSettings().OSMAND_PRO_PURCHASED.get();
+	}
+
+	public static boolean isSubscribedToMaps(@NonNull OsmandApplication ctx) {
+		return Version.isDeveloperBuild(ctx)
+				|| ctx.getSettings().OSMAND_MAPS_PURCHASED.get();
+	}
+
 	public static boolean isSubscribedToLiveUpdates(@NonNull OsmandApplication ctx) {
-		return Version.isDeveloperBuild(ctx) || ctx.getSettings().LIVE_UPDATES_PURCHASED.get();
+		return Version.isDeveloperBuild(ctx)
+				|| ctx.getSettings().LIVE_UPDATES_PURCHASED.get()
+				|| ctx.getSettings().OSMAND_PRO_PURCHASED.get();
+	}
+
+	public static boolean isSubscribedToOsmAndPro(@NonNull OsmandApplication ctx) {
+		return Version.isDeveloperBuild(ctx)
+				|| ctx.getSettings().OSMAND_PRO_PURCHASED.get();
+	}
+
+	public static boolean isSubscribedToPromo(@NonNull OsmandApplication ctx) {
+		return Version.isDeveloperBuild(ctx)
+				|| ctx.getSettings().BACKUP_PROMOCODE_ACTIVE.get();
+	}
+
+	public static boolean isOsmAndProAvailable(@NonNull OsmandApplication ctx) {
+		return Version.isDeveloperBuild(ctx)
+				|| isSubscribedToPromo(ctx)
+				|| isSubscribedToOsmAndPro(ctx);
 	}
 
 	public static boolean isFullVersionPurchased(@NonNull OsmandApplication ctx) {
@@ -150,8 +186,8 @@ public abstract class InAppPurchaseHelper {
 		return purchases;
 	}
 
-	public InAppSubscriptionList getLiveUpdates() {
-		return purchases.getLiveUpdates();
+	public InAppSubscriptionList getSubscriptions() {
+		return purchases.getSubscriptions();
 	}
 
 	public InAppPurchase getFullVersion() {
@@ -188,12 +224,37 @@ public abstract class InAppPurchaseHelper {
 	@NonNull
 	public List<InAppSubscription> getEverMadeSubscriptions() {
 		List<InAppSubscription> subscriptions = new ArrayList<>();
-		for (InAppSubscription subscription : getLiveUpdates().getVisibleSubscriptions()) {
-			if (subscription.isPurchased() ||  subscription.getState() != SubscriptionState.UNDEFINED) {
+		for (InAppSubscription subscription : getSubscriptions().getVisibleSubscriptions()) {
+			if (subscription.isPurchased() || subscription.getState() != SubscriptionState.UNDEFINED) {
 				subscriptions.add(subscription);
 			}
 		}
 		return subscriptions;
+	}
+
+	@NonNull
+	public List<InAppPurchase> getEverMadeMainPurchases() {
+		List<InAppPurchase> purchases = new ArrayList<>(getEverMadeSubscriptions());
+
+		InAppPurchase fullVersion = getFullVersion();
+		if (fullVersion.isPurchased()) {
+			purchases.add(fullVersion);
+		}
+		return purchases;
+	}
+
+	public static void subscribe(@NonNull Activity activity, @NonNull InAppPurchaseHelper purchaseHelper, @NonNull String sku) {
+		OsmandApplication app = (OsmandApplication) activity.getApplication();
+		OsmandSettings settings = app.getSettings();
+		if (settings.isInternetConnectionAvailable(true)) {
+			purchaseHelper.purchaseSubscription(activity, sku,
+					settings.BILLING_USER_EMAIL.get(),
+					settings.BILLING_USER_NAME.get(),
+					settings.BILLING_USER_COUNTRY_DOWNLOAD_NAME.get(),
+					settings.BILLING_HIDE_USER_NAME.get());
+		} else {
+			app.showToastMessage(R.string.internet_not_available);
+		}
 	}
 
 	public abstract void isInAppPurchaseSupported(@NonNull final Activity activity, @Nullable final InAppPurchaseInitCallback callback);
@@ -202,13 +263,39 @@ public abstract class InAppPurchaseHelper {
 		return lastValidationCheckTime != 0;
 	}
 
-	public boolean isPurchased(String inAppSku) {
-		if (purchases.isFullVersion(inAppSku)) {
-			return isFullVersionPurchased(ctx);
-		} else if (purchases.isLiveUpdates(inAppSku)) {
-			return isSubscribedToLiveUpdates(ctx);
-		} else if (purchases.isDepthContours(inAppSku)) {
-			return isDepthContoursPurchased(ctx);
+	public boolean isPurchased(String sku) {
+		List<InAppPurchase> allPurchases = purchases.getAllInAppPurchases(true);
+		for (InAppPurchase p : allPurchases) {
+			if (p.getSku().equals(sku) && p.isPurchased()) {
+				return true;
+			}
+		}
+		InAppPurchase purchase = purchases.getInAppPurchaseBySku(sku);
+		if (purchase == null) {
+			purchase = purchases.getInAppSubscriptionBySku(sku);
+		}
+		if (purchase != null) {
+			if (purchases.isFullVersion(purchase) && isFullVersionPurchased(ctx)) {
+				return true;
+			} else if (purchases.isDepthContours(purchase) && isDepthContoursPurchased(ctx)) {
+				return true;
+			}
+			int featureId = purchase.getFeatureId();
+			for (InAppPurchase p : allPurchases) {
+				if (p.hasFeatureInScope(featureId)) {
+					if (p.isPurchased()) {
+						return true;
+					} else {
+						if (purchases.isLiveUpdatesSubscription(p) && isSubscribedToLiveUpdates(ctx)) {
+							return true;
+						} else if (purchases.isOsmAndProSubscription(p) && isSubscribedToOsmAndPro(ctx)) {
+							return true;
+						} else if (purchases.isMapsSubscription(p) && isSubscribedToMaps(ctx)) {
+							return true;
+						}
+					}
+				}
+			}
 		}
 		return false;
 	}
@@ -253,21 +340,26 @@ public abstract class InAppPurchaseHelper {
 	protected abstract void execImpl(@NonNull final InAppPurchaseTaskType taskType, @NonNull final InAppCommand command);
 
 	public boolean needRequestInventory() {
-		return !inventoryRequested && ((isSubscribedToLiveUpdates(ctx) && Algorithms.isEmpty(ctx.getSettings().BILLING_PURCHASE_TOKENS_SENT.get()))
+		return !inventoryRequested && ((isSubscribedToAny(ctx) && Algorithms.isEmpty(ctx.getSettings().BILLING_PURCHASE_TOKENS_SENT.get()))
 				|| System.currentTimeMillis() - lastValidationCheckTime > PURCHASE_VALIDATION_PERIOD_MSEC);
+	}
+
+	public boolean needRequestPromo() {
+		return !promoRequested || System.currentTimeMillis() - lastPromoCheckTime > PURCHASE_VALIDATION_PERIOD_MSEC;
 	}
 
 	public void requestInventory() {
 		notifyShowProgress(InAppPurchaseTaskType.REQUEST_INVENTORY);
 		new RequestInventoryTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, (Void) null);
+		new CheckPromoTask(null).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, (Void) null);
 	}
 
 	public abstract void purchaseFullVersion(@NonNull final Activity activity) throws UnsupportedOperationException;
 
-	public void purchaseLiveUpdates(@NonNull Activity activity, String sku, String email, String userName,
-									String countryDownloadName, boolean hideUserName) {
-		notifyShowProgress(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES);
-		new LiveUpdatesPurchaseTask(activity, sku, email, userName, countryDownloadName, hideUserName)
+	public void purchaseSubscription(@NonNull Activity activity, String sku, String email, String userName,
+									 String countryDownloadName, boolean hideUserName) {
+		notifyShowProgress(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION);
+		new SubscriptionPurchaseTask(activity, sku, email, userName, countryDownloadName, hideUserName)
 				.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, (Void) null);
 	}
 
@@ -278,20 +370,20 @@ public abstract class InAppPurchaseHelper {
 	public abstract void manageSubscription(@NonNull Context ctx, @Nullable String sku);
 
 	@SuppressLint("StaticFieldLeak")
-	private class LiveUpdatesPurchaseTask extends AsyncTask<Void, Void, String> {
+	private class SubscriptionPurchaseTask extends AsyncTask<Void, Void, String> {
 
-		private WeakReference<Activity> activity;
+		private final WeakReference<Activity> activity;
 
-		private String sku;
-		private String email;
-		private String userName;
-		private String countryDownloadName;
-		private boolean hideUserName;
+		private final String sku;
+		private final String email;
+		private final String userName;
+		private final String countryDownloadName;
+		private final boolean hideUserName;
 
 		private String userId;
 
-		LiveUpdatesPurchaseTask(Activity activity, String sku, String email, String userName,
-								String countryDownloadName, boolean hideUserName) {
+		SubscriptionPurchaseTask(Activity activity, String sku, String email, String userName,
+								 String countryDownloadName, boolean hideUserName) {
 			this.activity = new WeakReference<>(activity);
 
 			this.sku = sku;
@@ -329,15 +421,15 @@ public abstract class InAppPurchaseHelper {
 				if (!Algorithms.isEmpty(userId)) {
 					if (Algorithms.isEmpty(token)) {
 						complain("User token is empty.");
-						notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES);
-						notifyError(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES, "User token is empty.");
+						notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION);
+						notifyError(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION, "User token is empty.");
 						stop(true);
 						return;
 					}
 				} else {
 					complain("Cannot retrieve userId from server.");
-					notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES);
-					notifyError(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES, "Cannot retrieve userId from server.");
+					notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION);
+					notifyError(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION, "Cannot retrieve userId from server.");
 					stop(true);
 					return;
 				}
@@ -353,26 +445,26 @@ public abstract class InAppPurchaseHelper {
 					String message = "JSON parsing error: "
 							+ (e.getMessage() == null ? "unknown" : e.getMessage());
 					complain(message);
-					notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES);
-					notifyError(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES, message);
+					notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION);
+					notifyError(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION, message);
 					stop(true);
 				}
 			}
 
-			notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES);
+			notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION);
 			if (!Algorithms.isEmpty(userId) && !Algorithms.isEmpty(token)) {
-				logDebug("Launching purchase flow for live updates subscription for userId=" + userId);
+				logDebug("Launching purchase flow for " + sku + " subscription for userId=" + userId);
 				final String userInfo = userId + " " + token;
-				exec(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES, getPurchaseLiveUpdatesCommand(activity, sku, userInfo));
+				exec(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION, getPurchaseSubscriptionCommand(activity, sku, userInfo));
 			} else {
-				notifyError(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES, "Empty userId");
+				notifyError(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION, "Empty userId");
 				stop(true);
 			}
 		}
 	}
 
-	protected abstract InAppCommand getPurchaseLiveUpdatesCommand(final WeakReference<Activity> activity,
-																  final String sku, final String userInfo) throws UnsupportedOperationException;
+	protected abstract InAppCommand getPurchaseSubscriptionCommand(final WeakReference<Activity> activity,
+																   final String sku, final String userInfo) throws UnsupportedOperationException;
 
 	@SuppressLint("StaticFieldLeak")
 	private class RequestInventoryTask extends AsyncTask<Void, Void, String[]> {
@@ -382,15 +474,16 @@ public abstract class InAppPurchaseHelper {
 
 		@Override
 		protected String[] doInBackground(Void... params) {
+			String activeSubscriptionsIds = null;
+			String subscriptionsState = null;
 			try {
 				Map<String, String> parameters = new HashMap<>();
 				parameters.put("androidPackage", ctx.getPackageName());
 				addUserInfo(parameters);
-				String activeSubscriptionsIds = AndroidNetworkUtils.sendRequest(ctx,
+				activeSubscriptionsIds = AndroidNetworkUtils.sendRequest(ctx,
 						"https://osmand.net/api/subscriptions/active",
 						parameters, "Requesting active subscriptions...", false, false);
 
-				String subscriptionsState = null;
 				String userId = ctx.getSettings().BILLING_USER_ID.get();
 				String userToken = ctx.getSettings().BILLING_USER_TOKEN.get();
 				if (!Algorithms.isEmpty(userId) && !Algorithms.isEmpty(userToken)) {
@@ -400,12 +493,10 @@ public abstract class InAppPurchaseHelper {
 							"https://osmand.net/api/subscriptions/get",
 							parameters, "Requesting subscriptions state...", false, false);
 				}
-
-				return new String[] { activeSubscriptionsIds, subscriptionsState };
 			} catch (Exception e) {
 				logError("sendRequest Error", e);
 			}
-			return null;
+			return new String[] {activeSubscriptionsIds, subscriptionsState};
 		}
 
 		@Override
@@ -424,7 +515,7 @@ public abstract class InAppPurchaseHelper {
 							JSONObject subObj = obj.getJSONObject(skuType);
 							String sku = subObj.getString("sku");
 							if (!Algorithms.isEmpty(sku)) {
-								getLiveUpdates().upgradeSubscription(sku);
+								getSubscriptions().upgradeSubscription(sku);
 							}
 						}
 					}
@@ -434,39 +525,133 @@ public abstract class InAppPurchaseHelper {
 			}
 			if (subscriptionsStateJson != null) {
 				inventoryRequested = true;
-				Map<String, SubscriptionStateHolder> subscriptionStateMap = new HashMap<>();
-				try {
-					JSONArray subArrJson = new JSONArray(subscriptionsStateJson);
-					for (int i = 0; i < subArrJson.length(); i++) {
-						JSONObject subObj = subArrJson.getJSONObject(i);
-						String sku = subObj.getString("sku");
-						String state = subObj.getString("state");
-						long expireTime = 0;
-						if (subObj.has("expire_time")) {
-							expireTime = subObj.getLong("expire_time");
-						}
-						if (!Algorithms.isEmpty(sku) && !Algorithms.isEmpty(state)) {
-							SubscriptionStateHolder stateHolder = new SubscriptionStateHolder();
-							stateHolder.state = SubscriptionState.getByStateStr(state);
-							stateHolder.expireTime = expireTime;
-							subscriptionStateMap.put(sku, stateHolder);
-						}
-					}
-				} catch (JSONException e) {
-					logError("Json parsing error", e);
-				}
-				InAppPurchaseHelper.this.subscriptionStateMap = subscriptionStateMap;
+				subscriptionStateMap = parseSubscriptionStates(subscriptionsStateJson);
 			}
 			exec(InAppPurchaseTaskType.REQUEST_INVENTORY, getRequestInventoryCommand());
+		}
+	}
+
+	public Map<String, SubscriptionStateHolder> parseSubscriptionStates(@NonNull String subscriptionsStateJson) {
+		Map<String, SubscriptionStateHolder> subscriptionStateMap = new HashMap<>();
+		try {
+			JSONArray subArrJson = new JSONArray(subscriptionsStateJson);
+			for (int i = 0; i < subArrJson.length(); i++) {
+				JSONObject subObj = subArrJson.getJSONObject(i);
+				String sku = subObj.getString("sku");
+				String state = subObj.getString("state");
+
+				if (!Algorithms.isEmpty(sku) && !Algorithms.isEmpty(state)) {
+					SubscriptionStateHolder stateHolder = new SubscriptionStateHolder();
+					stateHolder.state = SubscriptionState.getByStateStr(state);
+					stateHolder.startTime = subObj.optLong("start_time");
+					stateHolder.expireTime = subObj.optLong("expire_time");
+					subscriptionStateMap.put(sku, stateHolder);
+				}
+			}
+		} catch (JSONException e) {
+			logError("Json parsing error", e);
+		}
+		return subscriptionStateMap;
+	}
+
+	public void checkPromoAsync(@Nullable CallbackWithObject<Boolean> listener) {
+		CheckPromoTask task = new CheckPromoTask(listener);
+		task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, (Void) null);
+	}
+
+	@SuppressLint("StaticFieldLeak")
+	private class CheckPromoTask extends AsyncTask<Void, Void, Boolean> {
+
+		private final CallbackWithObject<Boolean> listener;
+
+		public CheckPromoTask(@Nullable CallbackWithObject<Boolean> listener) {
+			this.listener = listener;
+		}
+
+		@Override
+		protected Boolean doInBackground(Void... voids) {
+			boolean promoActive = false;
+			try {
+				String promocode = ctx.getSettings().BACKUP_PROMOCODE.get();
+				if (!Algorithms.isEmpty(promocode)) {
+					promoActive = checkPromoSubscription(promocode);
+				}
+				if (!promoActive) {
+					promoActive = validateUserSubscription();
+				}
+			} catch (Exception e) {
+				logError("checkPromoAsync Error", e);
+			}
+			return promoActive;
+		}
+
+		private boolean validateUserSubscription() {
+			boolean[] activePromo = new boolean[1];
+			String deviceId = ctx.getSettings().BACKUP_DEVICE_ID.get();
+			String accessToken = ctx.getSettings().BACKUP_ACCESS_TOKEN.get();
+			if (!Algorithms.isEmpty(deviceId) && !Algorithms.isEmpty(accessToken)) {
+				Map<String, String> params = new HashMap<>();
+				params.put("deviceid", deviceId);
+				params.put("accessToken", accessToken);
+				AndroidNetworkUtils.sendRequest(ctx, "https://osmand.net/userdata/user-validate-sub",
+						params, "Validate user subscription", false, false, (result, error) -> {
+							if (Algorithms.isEmpty(error)) {
+								if (result != null) {
+									try {
+										JSONObject obj = new JSONObject(result);
+										String orderId = obj.optString("orderid");
+										if (!Algorithms.isEmpty(orderId)) {
+											activePromo[0] = checkPromoSubscription(orderId);
+										}
+									} catch (JSONException e) {
+										logError("Json parsing error", e);
+									}
+								}
+							} else {
+								logError(error);
+							}
+						});
+			}
+			return activePromo[0];
+		}
+
+		private boolean checkPromoSubscription(@NonNull String orderId) {
+			Map<String, String> params = new HashMap<>();
+			params.put("orderId", orderId);
+			String subscriptionsState = AndroidNetworkUtils.sendRequest(ctx, "https://osmand.net/api/subscriptions/get",
+					params, "Requesting promo subscription state", false, false);
+
+			if (subscriptionsState != null) {
+				Map<String, SubscriptionStateHolder> subscriptionStateMap = parseSubscriptionStates(subscriptionsState);
+				SubscriptionStateHolder promoState = subscriptionStateMap.get("promo_website");
+				if (promoState != null) {
+					ctx.getSettings().BACKUP_PROMOCODE_STATE.set(promoState.state);
+					ctx.getSettings().BACKUP_PROMOCODE_START_TIME.set(promoState.startTime);
+					ctx.getSettings().BACKUP_PROMOCODE_EXPIRE_TIME.set(promoState.expireTime);
+					return promoState.state.isActive();
+				}
+			}
+			return false;
+		}
+
+		@Override
+		protected void onPostExecute(Boolean active) {
+			promoRequested = true;
+			lastPromoCheckTime = System.currentTimeMillis();
+			ctx.getSettings().BACKUP_PROMOCODE_ACTIVE.set(active);
+
+			if (listener != null) {
+				listener.processResult(active);
+			}
 		}
 	}
 
 	protected abstract InAppCommand getRequestInventoryCommand() throws UnsupportedOperationException;
 
 	protected void onSkuDetailsResponseDone(List<PurchaseInfo> purchaseInfoList) {
-		final AndroidNetworkUtils.OnRequestResultListener listener = new AndroidNetworkUtils.OnRequestResultListener() {
+		final OnRequestResultListener listener = new OnRequestResultListener() {
 			@Override
-			public void onResult(String result) {
+			public void onResult(@Nullable String result, @Nullable String error) {
 				notifyDismissProgress(InAppPurchaseTaskType.REQUEST_INVENTORY);
 				notifyGetItems();
 				stop(true);
@@ -477,7 +662,7 @@ public abstract class InAppPurchaseHelper {
 		if (purchaseInfoList.size() > 0) {
 			sendTokens(purchaseInfoList, listener);
 		} else {
-			listener.onResult("OK");
+			listener.onResult("OK", null);
 		}
 	}
 
@@ -493,25 +678,42 @@ public abstract class InAppPurchaseHelper {
 	protected void onPurchaseDone(PurchaseInfo info) {
 		logDebug("Purchase successful.");
 
-		InAppSubscription liveUpdatesPurchase = getLiveUpdates().getSubscriptionBySku(info.getSku());
-		if (liveUpdatesPurchase != null) {
+		InAppSubscription subscription = getSubscriptions().getSubscriptionBySku(info.getSku());
+		if (subscription != null) {
+			final boolean maps = purchases.isMapsSubscription(subscription);
+			final boolean liveUpdates = purchases.isLiveUpdatesSubscription(subscription);
+			final boolean pro = purchases.isOsmAndProSubscription(subscription);
 			// bought live updates
-			logDebug("Live updates subscription purchased.");
-			final String sku = liveUpdatesPurchase.getSku();
-			liveUpdatesPurchase.setPurchaseState(PurchaseState.PURCHASED);
-			liveUpdatesPurchase.setPurchaseInfo(ctx, info);
-			liveUpdatesPurchase.setState(ctx, SubscriptionState.UNDEFINED);
+			if (maps) {
+				logDebug("Maps subscription purchased.");
+			} else if (liveUpdates) {
+				logDebug("Live updates subscription purchased.");
+			} else if (pro) {
+				logDebug("OsmAnd Pro subscription purchased.");
+			}
+			final String sku = subscription.getSku();
+			subscription.setPurchaseState(PurchaseState.PURCHASED);
+			subscription.setPurchaseInfo(ctx, info);
+			subscription.setState(ctx, SubscriptionState.UNDEFINED);
 			sendTokens(Collections.singletonList(info), new OnRequestResultListener() {
 				@Override
-				public void onResult(String result) {
-					boolean active = ctx.getSettings().LIVE_UPDATES_PURCHASED.get();
-					ctx.getSettings().LIVE_UPDATES_PURCHASED.set(true);
-					ctx.getSettings().getCustomRenderBooleanProperty("depthContours").set(true);
-
-					ctx.getSettings().LIVE_UPDATES_EXPIRED_FIRST_DLG_SHOWN_TIME.set(0L);
-					ctx.getSettings().LIVE_UPDATES_EXPIRED_SECOND_DLG_SHOWN_TIME.set(0L);
-
-					notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_LIVE_UPDATES);
+				public void onResult(@Nullable String result, @Nullable String error) {
+					boolean active = false;
+					if (liveUpdates || pro) {
+						active = ctx.getSettings().LIVE_UPDATES_PURCHASED.get();
+						ctx.getSettings().LIVE_UPDATES_PURCHASED.set(true);
+						if (pro) {
+							ctx.getSettings().OSMAND_PRO_PURCHASED.set(true);
+						}
+						ctx.getSettings().getCustomRenderBooleanProperty("depthContours").set(true);
+						ctx.getSettings().LIVE_UPDATES_EXPIRED_FIRST_DLG_SHOWN_TIME.set(0L);
+						ctx.getSettings().LIVE_UPDATES_EXPIRED_SECOND_DLG_SHOWN_TIME.set(0L);
+					} else if (maps) {
+						active = ctx.getSettings().OSMAND_MAPS_PURCHASED.get();
+						ctx.getSettings().OSMAND_MAPS_PURCHASED.set(true);
+						ctx.getSettings().getCustomRenderBooleanProperty("depthContours").set(true);
+					}
+					notifyDismissProgress(InAppPurchaseTaskType.PURCHASE_SUBSCRIPTION);
 					notifyItemPurchased(sku, active);
 					stop(true);
 				}
@@ -596,7 +798,7 @@ public abstract class InAppPurchaseHelper {
 		try {
 			String url = "https://osmand.net/subscription/purchased";
 			String userOperation = "Sending purchase info...";
-			final List<AndroidNetworkUtils.Request> requests = new ArrayList<>();
+			final List<Request> requests = new ArrayList<>();
 			for (PurchaseInfo info : purchaseInfoList) {
 				Map<String, String> parameters = new HashMap<>();
 				parameters.put("userid", userId);
@@ -606,9 +808,12 @@ public abstract class InAppPurchaseHelper {
 				parameters.put("email", email);
 				parameters.put("token", token);
 				addUserInfo(parameters);
-				requests.add(new AndroidNetworkUtils.Request(url, parameters, userOperation, true, true));
+				requests.add(new Request(url, parameters, userOperation, true, true));
 			}
 			AndroidNetworkUtils.sendRequestsAsync(ctx, requests, new OnSendRequestsListener() {
+				@Override
+				public void onRequestSending(@NonNull Request request) {
+				}
 
 				@Override
 				public void onRequestSent(@NonNull RequestResponse response) {
@@ -642,7 +847,7 @@ public abstract class InAppPurchaseHelper {
 						}
 					}
 					if (listener != null) {
-						listener.onResult("OK");
+						listener.onResult("OK", null);
 					}
 				}
 
@@ -695,7 +900,7 @@ public abstract class InAppPurchaseHelper {
 		} catch (Exception e) {
 			logError("SendToken Error", e);
 			if (listener != null) {
-				listener.onResult("Error");
+				listener.onResult("Error", null);
 			}
 		}
 	}
@@ -767,5 +972,4 @@ public abstract class InAppPurchaseHelper {
 	protected void logError(String msg, Throwable e) {
 		Log.e(TAG, "Error: " + msg, e);
 	}
-
 }

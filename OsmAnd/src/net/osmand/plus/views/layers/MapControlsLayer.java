@@ -782,11 +782,12 @@ public class MapControlsLayer extends OsmandMapLayer {
 
 	public void startNavigation() {
 		OsmandApplication app = mapActivity.getMyApplication();
+		OsmandSettings settings = app.getSettings();
 		RoutingHelper routingHelper = app.getRoutingHelper();
 		if (routingHelper.isFollowingMode()) {
 			switchToRouteFollowingLayout();
-			if (app.getSettings().APPLICATION_MODE.get() != routingHelper.getAppMode()) {
-				app.getSettings().setApplicationMode(routingHelper.getAppMode(), false);
+			if (settings.getApplicationMode() != routingHelper.getAppMode()) {
+				settings.setApplicationMode(routingHelper.getAppMode(), false);
 			}
 		} else {
 			if (!app.getTargetPointsHelper().checkPointToNavigateShort()) {
@@ -794,14 +795,14 @@ public class MapControlsLayer extends OsmandMapLayer {
 			} else {
 				touchEvent = 0;
 				app.logEvent("start_navigation");
-				app.getSettings().setApplicationMode(routingHelper.getAppMode(), false);
+				settings.setApplicationMode(routingHelper.getAppMode(), false);
 				mapActivity.getMapViewTrackingUtilities().backToLocationImpl(17, true);
-				app.getSettings().FOLLOW_THE_ROUTE.set(true);
+				settings.FOLLOW_THE_ROUTE.set(true);
 				routingHelper.setFollowingMode(true);
 				routingHelper.setRoutePlanningMode(false);
 				mapActivity.getMapViewTrackingUtilities().switchToRoutePlanningMode();
-				app.getRoutingHelper().notifyIfRouteIsCalculated();
-				if (!app.getSettings().simulateNavigation) {
+				routingHelper.notifyIfRouteIsCalculated();
+				if (!settings.simulateNavigation) {
 					routingHelper.setCurrentLocation(app.getLocationProvider().getLastKnownLocation(), false);
 				} else if (routingHelper.isRouteCalculated() && !routingHelper.isRouteBeingCalculated()) {
 					OsmAndLocationSimulation sim = app.getLocationProvider().getLocationSimulation();
@@ -1028,7 +1029,7 @@ public class MapControlsLayer extends OsmandMapLayer {
 		});
 
 		LayerTransparencySeekbarMode seekbarMode = settings.LAYER_TRANSPARENCY_SEEKBAR_MODE.get();
-		if (OsmandPlugin.getEnabledPlugin(OsmandRasterMapsPlugin.class) != null) {
+		if (OsmandPlugin.isActive(OsmandRasterMapsPlugin.class)) {
 			if (seekbarMode == LayerTransparencySeekbarMode.OVERLAY && settings.MAP_OVERLAY.get() != null) {
 				showTransparencyBar(settings.MAP_OVERLAY_TRANSPARENCY, true);
 			} else if (seekbarMode == LayerTransparencySeekbarMode.UNDERLAY && settings.MAP_UNDERLAY.get() != null) {
@@ -1039,7 +1040,7 @@ public class MapControlsLayer extends OsmandMapLayer {
 
 	public void updateTransparencySlider() {
 		LayerTransparencySeekbarMode seekbarMode = settings.LAYER_TRANSPARENCY_SEEKBAR_MODE.get();
-		if (OsmandPlugin.getEnabledPlugin(OsmandRasterMapsPlugin.class) != null) {
+		if (OsmandPlugin.isActive(OsmandRasterMapsPlugin.class)) {
 			if (seekbarMode == LayerTransparencySeekbarMode.OVERLAY && settings.MAP_OVERLAY.get() != null) {
 				transparencySlider.setValue(settings.MAP_OVERLAY_TRANSPARENCY.get());
 			} else if (seekbarMode == LayerTransparencySeekbarMode.UNDERLAY && settings.MAP_UNDERLAY.get() != null) {

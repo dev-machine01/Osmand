@@ -8,7 +8,6 @@ import android.text.SpannableStringBuilder;
 import android.text.style.ForegroundColorSpan;
 
 import androidx.annotation.ColorInt;
-import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
@@ -33,7 +32,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.Currency;
 import java.util.Date;
 import java.util.HashMap;
@@ -48,8 +46,8 @@ public abstract class InAppPurchases {
 	protected InAppPurchase depthContours;
 	protected InAppPurchase contourLines;
 	protected InAppSubscription monthlyLiveUpdates;
-	protected InAppSubscription discountedMonthlyLiveUpdates;
-	protected InAppSubscriptionList liveUpdates;
+	protected InAppSubscription legacyMonthlyLiveUpdates;
+	protected InAppSubscriptionList subscriptions;
 	protected InAppPurchase[] inAppPurchases;
 
 	protected InAppPurchases(OsmandApplication ctx) {
@@ -89,25 +87,25 @@ public abstract class InAppPurchases {
 	public InAppSubscription getPurchasedMonthlyLiveUpdates() {
 		if (monthlyLiveUpdates.isAnyPurchased()) {
 			return monthlyLiveUpdates;
-		} else if (discountedMonthlyLiveUpdates != null && discountedMonthlyLiveUpdates.isAnyPurchased()) {
-			return discountedMonthlyLiveUpdates;
+		} else if (legacyMonthlyLiveUpdates != null && legacyMonthlyLiveUpdates.isAnyPurchased()) {
+			return legacyMonthlyLiveUpdates;
 		}
 		return null;
 	}
 
 	@Nullable
 	public InAppSubscription getAnyPurchasedSubscription() {
-		List<InAppSubscription> allSubscriptions = liveUpdates.getAllSubscriptions();
+		List<InAppSubscription> allSubscriptions = subscriptions.getAllSubscriptions();
 		for (InAppSubscription subscription : allSubscriptions) {
-			if (subscription.isAnyPurchased()) {
+			if (subscription.isPurchased()) {
 				return subscription;
 			}
 		}
 		return null;
 	}
 
-	public InAppSubscriptionList getLiveUpdates() {
-		return liveUpdates;
+	public InAppSubscriptionList getSubscriptions() {
+		return subscriptions;
 	}
 
 	public List<InAppPurchase> getAllInAppPurchases(boolean includeSubscriptions) {
@@ -116,18 +114,18 @@ public abstract class InAppPurchases {
 		purchases.add(depthContours);
 		purchases.add(contourLines);
 		if (includeSubscriptions) {
-			purchases.addAll(liveUpdates.getAllSubscriptions());
+			purchases.addAll(subscriptions.getAllSubscriptions());
 		}
 		return purchases;
 	}
 
 	public List<InAppSubscription> getAllInAppSubscriptions() {
-		return liveUpdates.getAllSubscriptions();
+		return subscriptions.getAllSubscriptions();
 	}
 
 	@Nullable
 	public InAppSubscription getInAppSubscriptionBySku(@NonNull String sku) {
-		for (InAppSubscription s : liveUpdates.getAllSubscriptions()) {
+		for (InAppSubscription s : subscriptions.getAllSubscriptions()) {
 			if (sku.startsWith(s.getSkuNoVersion())) {
 				return s;
 			}
@@ -135,23 +133,27 @@ public abstract class InAppPurchases {
 		return null;
 	}
 
-	public abstract boolean isFullVersion(String sku);
+	public abstract boolean isFullVersion(InAppPurchase p);
 
-	public abstract boolean isDepthContours(String sku);
+	public abstract boolean isDepthContours(InAppPurchase p);
 
-	public abstract boolean isContourLines(String sku);
+	public abstract boolean isContourLines(InAppPurchase p);
 
-	public abstract boolean isLiveUpdates(String sku);
+	public abstract boolean isLiveUpdatesSubscription(InAppPurchase p);
+
+	public abstract boolean isOsmAndProSubscription(InAppPurchase p);
+
+	public abstract boolean isMapsSubscription(InAppPurchase p);
 
 	public abstract static class InAppSubscriptionList {
 
-		private List<InAppSubscription> subscriptions;
+		private final List<InAppSubscription> subscriptions;
 
 		InAppSubscriptionList(@NonNull InAppSubscription[] subscriptionsArray) {
 			this.subscriptions = Arrays.asList(subscriptionsArray);
 		}
 
-		private List<InAppSubscription> getSubscriptions() {
+		public List<InAppSubscription> getSubscriptions() {
 			return new ArrayList<>(subscriptions);
 		}
 
@@ -185,7 +187,7 @@ public abstract class InAppPurchases {
 						added = true;
 					}
 				}
-				if (!added && !s.isDiscounted()) {
+				if (!added && !s.isLegacy()) {
 					res.add(s);
 				}
 			}
@@ -226,16 +228,13 @@ public abstract class InAppPurchases {
 					expiredSubscriptions.add(s);
 				}
 			}
-			Collections.sort(expiredSubscriptions, new Comparator<InAppSubscription>() {
-				@Override
-				public int compare(InAppSubscription s1, InAppSubscription s2) {
-					int orderS1 = s1.getState().ordinal();
-					int orderS2 = s2.getState().ordinal();
-					if (orderS1 != orderS2) {
-						return (orderS1 < orderS2) ? -1 : ((orderS1 == orderS2) ? 0 : 1);
-					}
-					return Double.compare(s1.getMonthlyPriceValue(), s2.getMonthlyPriceValue());
+			Collections.sort(expiredSubscriptions, (s1, s2) -> {
+				int orderS1 = s1.getState().ordinal();
+				int orderS2 = s2.getState().ordinal();
+				if (orderS1 != orderS2) {
+					return (orderS1 < orderS2) ? -1 : ((orderS1 == orderS2) ? 0 : 1);
 				}
+				return Double.compare(s1.getMonthlyPriceValue(), s2.getMonthlyPriceValue());
 			});
 			return expiredSubscriptions.isEmpty() ? null : expiredSubscriptions.get(0);
 		}
@@ -249,7 +248,8 @@ public abstract class InAppPurchases {
 			NOT_PURCHASED
 		}
 
-		private String sku;
+		private final int featureId;
+		private final String sku;
 		private String price;
 		private double priceValue;
 		private String priceCurrencyCode;
@@ -258,17 +258,28 @@ public abstract class InAppPurchases {
 
 		double monthlyPriceValue;
 		boolean donationSupported = false;
-		boolean discounted = false;
 
 		private NumberFormat currencyFormatter;
 
-		protected InAppPurchase(@NonNull String sku) {
+		protected InAppPurchase(int featureId, @NonNull String sku) {
+			this.featureId = featureId;
 			this.sku = sku;
 		}
 
-		protected InAppPurchase(@NonNull String sku, boolean discounted) {
-			this(sku);
-			this.discounted = discounted;
+		public int getFeatureId() {
+			return featureId;
+		}
+
+		@NonNull
+		public abstract int[] getScope();
+
+		public boolean hasFeatureInScope(int featureId) {
+			for (int id : getScope()) {
+				if (featureId == id) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		@NonNull
@@ -356,20 +367,22 @@ public abstract class InAppPurchases {
 			return purchaseState == PurchaseState.UNKNOWN;
 		}
 
-		public boolean isDiscounted() {
-			return discounted;
-		}
+		public abstract boolean isLegacy();
 
 		public CharSequence getTitle(Context ctx) {
 			return "";
 		}
 
 		public CharSequence getDescription(@NonNull Context ctx) {
+			return getFormattedPrice(ctx, getPriceValue(), getPriceCurrencyCode());
+		}
+
+		public String getFormattedPrice(@NonNull Context ctx, double priceValue, String priceCurrencyCode) {
 			NumberFormat currencyFormatter = getCurrencyFormatter();
 			if (currencyFormatter != null) {
-				return currencyFormatter.format(getPriceValue());
+				return currencyFormatter.format(priceValue);
 			} else {
-				return ctx.getString(R.string.default_price_currency_format, getPriceValue(), getPriceCurrencyCode());
+				return ctx.getString(R.string.default_price_currency_format, priceValue, priceCurrencyCode);
 			}
 		}
 
@@ -452,15 +465,15 @@ public abstract class InAppPurchases {
 
 	public static class InAppSubscriptionIntroductoryInfo {
 
-		private InAppSubscription subscription;
+		private final InAppSubscription subscription;
 
-		private String introductoryPrice;
-		private long introductoryPriceAmountMicros;
-		private String introductoryPeriodString;
-		private int introductoryCycles;
+		private final String introductoryPrice;
+		private final long introductoryPriceAmountMicros;
+		private final String introductoryPeriodString;
+		private final int introductoryCycles;
 
-		private double introductoryPriceValue;
-		private Period introductoryPeriod;
+		private final double introductoryPriceValue;
+		private final Period introductoryPeriod;
 
 		public InAppSubscriptionIntroductoryInfo(@NonNull InAppSubscription subscription,
 												 String introductoryPrice,
@@ -630,6 +643,8 @@ public abstract class InAppPurchases {
 
 	public static abstract class InAppSubscription extends InAppPurchase {
 
+		private final static int MIN_SHOWN_DISCOUNT_PERCENT = 10;
+
 		private final Map<String, InAppSubscription> upgrades = new ConcurrentHashMap<>();
 		private final String skuNoVersion;
 		private String subscriptionPeriodString;
@@ -637,6 +652,7 @@ public abstract class InAppPurchases {
 		private boolean upgrade = false;
 		private SubscriptionState state = SubscriptionState.UNDEFINED;
 		private SubscriptionState previousState = SubscriptionState.UNDEFINED;
+		private long startTime = 0;
 		private long expireTime = 0;
 
 		private InAppSubscriptionIntroductoryInfo introductoryInfo;
@@ -687,13 +703,13 @@ public abstract class InAppPurchases {
 			}
 		}
 
-		InAppSubscription(@NonNull String skuNoVersion, int version) {
-			super(skuNoVersion + "_v" + version);
+		InAppSubscription(int id, @NonNull String skuNoVersion, int version) {
+			super(id, skuNoVersion + "_v" + version);
 			this.skuNoVersion = skuNoVersion;
 		}
 
-		InAppSubscription(@NonNull String sku, boolean discounted) {
-			super(sku, discounted);
+		InAppSubscription(int id, @NonNull String sku) {
+			super(id, sku);
 			this.skuNoVersion = sku;
 		}
 
@@ -772,7 +788,10 @@ public abstract class InAppPurchases {
 			Date date = new Date(purchaseTime);
 			Calendar calendar = Calendar.getInstance();
 			calendar.setTime(date);
-			calendar.add(period.getUnit().getCalendarIdx(), period.getNumberOfUnits());
+			long currentTime = System.currentTimeMillis();
+			while (calendar.getTimeInMillis() < currentTime) {
+				calendar.add(period.getUnit().getCalendarIdx(), period.getNumberOfUnits());
+			}
 			return calendar.getTimeInMillis();
 		}
 
@@ -800,6 +819,32 @@ public abstract class InAppPurchases {
 
 		void storeExpireTime(@NonNull Context ctx, long expireTime) {
 			getExpireTimePref(ctx).set(expireTime);
+		}
+
+		public long getStartTime() {
+			return startTime;
+		}
+
+		public void setStartTime(@NonNull Context ctx, long expireTime) {
+			this.startTime = expireTime;
+			storeStartTime(ctx, expireTime);
+		}
+
+		private CommonPreference<Long> getStartTimePref(@NonNull Context ctx) {
+			return getSettings(ctx).registerLongPreference(getSku() + "_start_time", 0L).makeGlobal();
+		}
+
+		boolean restoreStartTime(@NonNull Context ctx) {
+			Long expireTime = getStartTimePref(ctx).get();
+			if (expireTime != null) {
+				this.startTime = expireTime;
+				return true;
+			}
+			return false;
+		}
+
+		void storeStartTime(@NonNull Context ctx, long expireTime) {
+			getStartTimePref(ctx).set(expireTime);
 		}
 
 		public boolean isAnyPurchased() {
@@ -838,7 +883,7 @@ public abstract class InAppPurchases {
 			/*
 			try {
 				if (subscriptionPeriod != null && subscriptionPeriod.getUnit() == PeriodUnit.YEAR) {
-					introductoryInfo = new InAppSubscriptionIntroductoryInfo(this, "30 грн.", 30000000L, "P1Y", "1");
+					introductoryInfo = new InAppSubscriptionIntroductoryInfo(this, "50 EUR", 50000000L, "P1Y", 1);
 				}
 			} catch (ParseException e) {
 				//
@@ -877,7 +922,12 @@ public abstract class InAppPurchases {
 
 		public String getDiscountTitle(@NonNull Context ctx, @NonNull InAppSubscription monthlyLiveUpdates) {
 			int discountPercent = getDiscountPercent(monthlyLiveUpdates);
-			return discountPercent > 0 ? ctx.getString(R.string.osm_live_payment_discount_descr, discountPercent + "%") : "";
+			return discountPercent > MIN_SHOWN_DISCOUNT_PERCENT ? ctx.getString(R.string.osm_live_payment_discount_descr, discountPercent + "%") : "";
+		}
+
+		public String getDiscount(@NonNull InAppSubscription monthlyLiveUpdates) {
+			int discountPercent = getDiscountPercent(monthlyLiveUpdates);
+			return discountPercent > MIN_SHOWN_DISCOUNT_PERCENT ? "-" + discountPercent + "%" : "";
 		}
 
 		public int getDiscountPercent(@NonNull InAppSubscription monthlyLiveUpdates) {
@@ -896,6 +946,17 @@ public abstract class InAppPurchases {
 			return 0;
 		}
 
+		public String getRegularPrice(@NonNull Context ctx, @NonNull InAppSubscription monthlyLiveUpdates) {
+			Period period = getSubscriptionPeriod();
+			if (period != null) {
+				double price = monthlyLiveUpdates.getPriceValue();
+				double months = period.getUnit().getMonthsValue();
+				double regularPrice = price * months;
+				return getFormattedPrice(ctx, regularPrice, getPriceCurrencyCode());
+			}
+			return "";
+		}
+
 		public String getPriceWithPeriod(Context ctx) {
 			return getPrice(ctx);
 		}
@@ -905,10 +966,10 @@ public abstract class InAppPurchases {
 		}
 	}
 
-	public static class InAppPurchaseDepthContours extends InAppPurchase {
+	public static abstract class InAppPurchaseDepthContours extends InAppPurchase {
 
-		protected InAppPurchaseDepthContours(String sku) {
-			super(sku);
+		protected InAppPurchaseDepthContours(int featureId, String sku) {
+			super(featureId, sku);
 		}
 
 		@Override
@@ -917,10 +978,10 @@ public abstract class InAppPurchases {
 		}
 	}
 
-	public static class InAppPurchaseContourLines extends InAppPurchase {
+	public static abstract class InAppPurchaseContourLines extends InAppPurchase {
 
-		protected InAppPurchaseContourLines(String sku) {
-			super(sku);
+		protected InAppPurchaseContourLines(int featureId, String sku) {
+			super(featureId, sku);
 		}
 
 		@Override
@@ -929,20 +990,16 @@ public abstract class InAppPurchases {
 		}
 	}
 
-	protected static abstract class InAppPurchaseLiveUpdatesMonthly extends InAppSubscription {
+	protected static abstract class InAppPurchaseMonthlySubscription extends InAppSubscription {
 
-		InAppPurchaseLiveUpdatesMonthly(String skuNoVersion, int version) {
-			super(skuNoVersion, version);
+		InAppPurchaseMonthlySubscription(int featureId, String skuNoVersion, int version) {
+			super(featureId, skuNoVersion, version);
 			donationSupported = true;
 		}
 
-		InAppPurchaseLiveUpdatesMonthly(@NonNull String sku, boolean discounted) {
-			super(sku, discounted);
+		InAppPurchaseMonthlySubscription(int featureId, @NonNull String sku) {
+			super(featureId, sku);
 			donationSupported = true;
-		}
-
-		InAppPurchaseLiveUpdatesMonthly(@NonNull String sku) {
-			this(sku, false);
 		}
 
 		@Override
@@ -958,12 +1015,12 @@ public abstract class InAppPurchases {
 
 		@Override
 		public String getDefaultPrice(Context ctx) {
-			return ctx.getString(R.string.osm_live_monthly_price);
+			return ctx.getString(R.string.osm_pro_monthly_price);
 		}
 
 		@Override
 		public String getDefaultMonthlyPrice(Context ctx) {
-			return ctx.getString(R.string.osm_live_monthly_price);
+			return ctx.getString(R.string.osm_pro_monthly_price);
 		}
 
 		@Override
@@ -988,14 +1045,14 @@ public abstract class InAppPurchases {
 		}
 	}
 
-	protected static abstract class InAppPurchaseLiveUpdates3Months extends InAppSubscription {
+	protected static abstract class InAppPurchaseQuarterlySubscription extends InAppSubscription {
 
-		InAppPurchaseLiveUpdates3Months(String skuNoVersion, int version) {
-			super(skuNoVersion, version);
+		InAppPurchaseQuarterlySubscription(int featureId, String skuNoVersion, int version) {
+			super(featureId, skuNoVersion, version);
 		}
 
-		InAppPurchaseLiveUpdates3Months(@NonNull String sku) {
-			super(sku, false);
+		InAppPurchaseQuarterlySubscription(int featureId, @NonNull String sku) {
+			super(featureId, sku);
 		}
 
 		@Override
@@ -1036,14 +1093,14 @@ public abstract class InAppPurchases {
 		}
 	}
 
-	protected static abstract class InAppPurchaseLiveUpdatesAnnual extends InAppSubscription {
+	protected static abstract class InAppPurchaseAnnualSubscription extends InAppSubscription {
 
-		InAppPurchaseLiveUpdatesAnnual(String skuNoVersion, int version) {
-			super(skuNoVersion, version);
+		InAppPurchaseAnnualSubscription(int featureId, String skuNoVersion, int version) {
+			super(featureId, skuNoVersion, version);
 		}
 
-		InAppPurchaseLiveUpdatesAnnual(@NonNull String sku) {
-			super(sku, false);
+		InAppPurchaseAnnualSubscription(int featureId, @NonNull String sku) {
+			super(featureId, sku);
 		}
 
 		@Override
@@ -1059,12 +1116,12 @@ public abstract class InAppPurchases {
 
 		@Override
 		public String getDefaultPrice(Context ctx) {
-			return ctx.getString(R.string.osm_live_annual_price);
+			return ctx.getString(R.string.osm_pro_annual_price);
 		}
 
 		@Override
 		public String getDefaultMonthlyPrice(Context ctx) {
-			return ctx.getString(R.string.osm_live_annual_monthly_price);
+			return ctx.getString(R.string.osm_pro_annual_monthly_price);
 		}
 
 		@Override
@@ -1084,10 +1141,15 @@ public abstract class InAppPurchases {
 		}
 	}
 
-	public static class InAppPurchaseLiveUpdatesOldMonthly extends InAppPurchaseLiveUpdatesMonthly {
+	public abstract static class InAppPurchaseLiveUpdatesOldMonthly extends InAppPurchaseMonthlySubscription {
 
-		InAppPurchaseLiveUpdatesOldMonthly(String sku) {
-			super(sku, true);
+		InAppPurchaseLiveUpdatesOldMonthly(int featureId, String sku) {
+			super(featureId, sku);
+		}
+
+		@Override
+		public boolean isLegacy() {
+			return true;
 		}
 
 		@Override

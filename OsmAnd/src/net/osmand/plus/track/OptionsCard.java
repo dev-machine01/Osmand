@@ -9,6 +9,7 @@ import android.view.ViewGroup;
 import androidx.annotation.NonNull;
 
 import net.osmand.AndroidUtils;
+import net.osmand.FileUtils;
 import net.osmand.GPXUtilities.GPXFile;
 import net.osmand.plus.GpxSelectionHelper.SelectedGpxFile;
 import net.osmand.plus.OsmandPlugin;
@@ -23,7 +24,7 @@ import net.osmand.plus.base.bottomsheetmenu.simpleitems.DividerItem;
 import net.osmand.plus.base.bottomsheetmenu.simpleitems.DividerSpaceItem;
 import net.osmand.plus.helpers.FontCache;
 import net.osmand.plus.osmedit.OsmEditingPlugin;
-import net.osmand.plus.routepreparationmenu.cards.BaseCard;
+import net.osmand.plus.routepreparationmenu.cards.MapBaseCard;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -32,7 +33,7 @@ import java.util.List;
 import static net.osmand.plus.myplaces.TrackActivityFragmentAdapter.isGpxFileSelected;
 import static net.osmand.util.Algorithms.capitalizeFirstLetter;
 
-public class OptionsCard extends BaseCard {
+public class OptionsCard extends MapBaseCard {
 
 	public static final int SHOW_ON_MAP_BUTTON_INDEX = 0;
 	public static final int APPEARANCE_BUTTON_INDEX = 1;
@@ -71,12 +72,14 @@ public class OptionsCard extends BaseCard {
 		items.clear();
 
 		boolean fileAvailable = gpxFile.path != null && !gpxFile.showCurrentTrack;
-		items.add(createShowOnMapItem());
-		items.add(createAppearanceItem());
-		if (fileAvailable) {
-			items.add(createDirectionsItem());
+		if (!FileUtils.isTempFile(app, gpxFile.path)) {
+			items.add(createShowOnMapItem());
+			items.add(createAppearanceItem());
+			if (fileAvailable) {
+				items.add(createDirectionsItem());
+			}
+			items.add(createDividerItem());
 		}
-		items.add(createDividerItem());
 		if (gpxFile.getGeneralTrack() != null) {
 			items.add(createJoinGapsItem());
 		}
@@ -92,7 +95,9 @@ public class OptionsCard extends BaseCard {
 				items.add(uploadOsmItem);
 			}
 			items.add(createDividerItem());
-			items.add(createEditItem());
+			if (!FileUtils.isTempFile(app, gpxFile.path)) {
+				items.add(createEditItem());
+			}
 			items.add(createRenameItem());
 			items.add(createChangeFolderItem());
 			items.add(createDividerItem());
@@ -161,7 +166,7 @@ public class OptionsCard extends BaseCard {
 	private BaseBottomSheetItem createDirectionsItem() {
 		return new SimpleBottomSheetItem.Builder()
 				.setIcon(getActiveIcon(R.drawable.ic_action_gdirections_dark))
-				.setTitle(app.getString(R.string.get_directions))
+				.setTitle(app.getString(R.string.shared_string_navigation))
 				.setLayoutId(R.layout.bottom_sheet_item_simple_pad_32dp)
 				.setOnClickListener(new View.OnClickListener() {
 					@Override
@@ -256,7 +261,7 @@ public class OptionsCard extends BaseCard {
 	}
 
 	private BaseBottomSheetItem createUploadOsmItem() {
-		OsmEditingPlugin osmEditingPlugin = OsmandPlugin.getEnabledPlugin(OsmEditingPlugin.class);
+		OsmEditingPlugin osmEditingPlugin = OsmandPlugin.getActivePlugin(OsmEditingPlugin.class);
 		if (osmEditingPlugin != null && selectedGpxFile.getTrackAnalysis(app).isTimeMoving()) {
 			return new SimpleBottomSheetItem.Builder()
 					.setIcon(getActiveIcon(R.drawable.ic_action_export))
